@@ -1,0 +1,1 @@
+{"name":"studio-fixture-vue8","private":true,"scripts":{"build-storybook":"storybook build --disable-telemetry"},"devDependencies":{"@storybook/vue3":"8.5.8","@storybook/vue3-vite":"8.5.8","storybook":"8.5.8","typescript":"5.7.3","vite":"6.3.5","vue":"3.5.13"},"packageManager":"pnpm@9.15.9"}

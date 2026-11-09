@@ -1,0 +1,1 @@
+{"name":"studio-fixture-html9","private":true,"scripts":{"build-storybook":"storybook build --disable-telemetry"},"devDependencies":{"storybook":"9.1.0","@storybook/html-vite":"9.1.0","vite":"6.3.5"},"packageManager":"pnpm@9.15.9"}

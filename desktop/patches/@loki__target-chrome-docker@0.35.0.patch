@@ -1,0 +1,40 @@
+diff --git a/src/create-chrome-docker-target.js b/src/create-chrome-docker-target.js
+index d00e06201878f469e0446de8a011063bf52e858e..c72994e80bb865252adb0516f5917c4cdbc95cd1 100644
+--- a/src/create-chrome-docker-target.js
++++ b/src/create-chrome-docker-target.js
+@@ -3,7 +3,16 @@ const { execSync } = require('child_process');
+ const execa = require('execa');
+ const waitPort = require('wait-port');
+ const CDP = require('chrome-remote-interface');
+-const getRandomPort = require('find-free-port-sync');
++const getStaticPort = require('find-free-port-sync');
++const net = require('node:net');
++const getRandomPort = () => new Promise((resolve, reject) => {
++  const server = net.createServer();
++  server.once('error', reject);
++  server.listen(0, '0.0.0.0', () => {
++    const { port } = server.address();
++    server.close((error) => error ? reject(error) : resolve(port));
++  });
++});
+ const {
+   ChromeError,
+   ensureDependencyAvailable,
+@@ -55,7 +64,7 @@ function createChromeDockerTarget({
+       );
+     }
+     if (isLocalFile) {
+-      staticServerPort = getRandomPort({ start: 1025 });
++      staticServerPort = getStaticPort({ start: 1025 });
+       staticServerPath = dockerUrl.substr('file:'.length);
+       dockerUrl = `http://${ip}:${staticServerPort}`;
+     } else {
+@@ -88,7 +97,7 @@ function createChromeDockerTarget({
+   async function start() {
+     ensureDependencyAvailable('docker');
+ 
+-    debuggerPort = getRandomPort();
++    debuggerPort = await getRandomPort();
+     if (isLocalFile) {
+       staticServer = createStaticServer(staticServerPath);
+       staticServer.listen(staticServerPort);

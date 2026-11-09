@@ -1,0 +1,103 @@
+diff --git a/src/create-chrome-target.js b/src/create-chrome-target.js
+--- a/src/create-chrome-target.js
++++ b/src/create-chrome-target.js
+@@ -124,13 +124,17 @@
+ 
+       const requestFailed = (requestId) => {
+         const failedURL = pendingRequestURLMap[requestId];
++        if (!failedURL) return;
+         if (!fetchFailIgnore || !fetchFailIgnore.test(failedURL)) {
+           failedURLs.push(failedURL);
+         }
+         requestEnded(requestId);
+       };
+ 
+-      Network.requestWillBeSent(({ requestId, request }) => {
++      Network.requestWillBeSent(({ requestId, request, type }) => {
++        const mode = options.studioNetwork || 'assets';
++        if (mode === 'none' || (mode === 'assets' && !['Document', 'Script', 'Stylesheet', 'Image', 'Font'].includes(type))) return;
++        if (options.chromeRequestIgnore && new RegExp(options.chromeRequestIgnore).test(request.url)) return;
+         if (stabilizationTimer) {
+           clearTimeout(stabilizationTimer);
+         }
+@@ -138,13 +142,12 @@
+       });
+ 
+       Network.responseReceived(({ requestId, response }) => {
+-        if (response.status >= 400) {
++        if (response.status >= 400 && !(options.studioAllowMockHttpErrors && response.fromServiceWorker)) {
+           requestFailed(requestId);
+-        } else {
+-          requestEnded(requestId);
+-        }
+-      });
+-
++        }
++      });
++
++      Network.loadingFinished(({ requestId }) => requestEnded(requestId));
+       Network.loadingFailed(({ requestId }) => {
+         requestFailed(requestId);
+       });
+@@ -169,10 +172,11 @@
+         .concat(args.map(JSON.stringify))
+         .join(',');
+       const expression = `(() => Promise.resolve((${functionToExecute})(${stringifiedArgs})).then(JSON.stringify))()`;
+-      const { result } = await Runtime.evaluate({
++      const { result, exceptionDetails } = await Runtime.evaluate({
+         expression,
+         awaitPromise: true,
+       });
++      if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text);
+       if (result.subtype === 'error') {
+         throw new Error(
+           result.description.replace(/^Error: /, '').split('\n')[0]
+@@ -198,9 +202,28 @@
+         debug('Disabling animations');
+         await evaluateOnNewDocument(`(${disableAnimations})(window);`);
+       }
+-      await evaluateOnNewDocument(`(${disablePointerEvents})(window);`);
++      // Keep real pointer interactions available to Storybook play functions.
++      await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x: -1, y: -1 });
+       await evaluateOnNewDocument(`(${disableInputCaret})(window);`);
+       await evaluateOnNewDocument(`(${setLokiIsRunning})(window);`);
++
++      await evaluateOnNewDocument(`(() => {
++        const attach = channel => {
++          if (!channel || !channel.on || channel.__studioObserved) return;
++          channel.__studioObserved = true;
++          for (const event of ['storyErrored', 'storyThrewException', 'playFunctionThrewException', 'storyMissing']) {
++            channel.on(event, error => { window.__STUDIO_STORY_ERROR__ = event + ': ' + (error?.message || error?.description || JSON.stringify(error)); });
++          }
++          channel.on('storyFinished', result => {
++            if (result?.status === 'error' && !window.__STUDIO_STORY_ERROR__) window.__STUDIO_STORY_ERROR__ = 'Storybook reported a failed story';
++          });
++        };
++        let channel = window.__STORYBOOK_ADDONS_CHANNEL__;
++        Object.defineProperty(window, '__STORYBOOK_ADDONS_CHANNEL__', {
++          configurable: true, get: () => channel, set: value => { channel = value; attach(value); }
++        });
++        attach(channel);
++      })();`);
+ 
+       debug(`Navigating to ${url}`);
+       startObservingRequests();
+@@ -234,7 +257,9 @@
+       await executeFunctionWithWindow(setLokiTestAttribute);
+ 
+       debug('Waiting for executeFunctionWithWindow...');
+-      await executeFunctionWithWindow(awaitLokiReady);
++      await executeFunctionWithWindow(awaitLokiReady, options);
++      await awaitRequestsFinished();
++      await ensureNoErrorPresent();
+     };
+ 
+     const getPositionInViewport = async (selector) => {
+@@ -410,6 +435,7 @@
+     } catch (err) {
+       if (err instanceof TimeoutError) {
+         debug(`Timed out waiting for "${url}" to load`);
++        throw err;
+       } else {
+         throw err;
+       }

@@ -1,0 +1,130 @@
+diff --git a/src/await-loki-ready.js b/src/await-loki-ready.js
+--- a/src/await-loki-ready.js
++++ b/src/await-loki-ready.js
+@@ -1,4 +1,41 @@
+-const awaitLokiReady = (window) =>
+-  window.loki && window.loki.awaitReady && window.loki.awaitReady();
+-
++const awaitLokiReady = async (window, options = {}) => {
++  const id = new URL(window.location.href).searchParams.get('id');
++  const timeout = options.studioTimeoutMs || 60000;
++  const started = window.performance.now();
++  const delay = ms => new Promise(resolve => window.setTimeout(resolve, ms));
++  const check = () => {
++    if (window.__STUDIO_STORY_ERROR__) throw new Error(window.__STUDIO_STORY_ERROR__);
++    const phase = window.__STORYBOOK_PREVIEW__?.currentRender?.phase;
++    if (phase === 'errored' || window.document.querySelector('.sb-show-errordisplay, .sb-show-nopreview'))
++      throw new Error(`Story ${id} failed to render`);
++    if (options.studioErrorSelector && window.document.querySelector(options.studioErrorSelector))
++      throw new Error(`Story ${id}: error selector found: ${options.studioErrorSelector}`);
++    if (window.performance.now() - started > timeout)
++      throw new Error(`Story ${id} did not finish rendering within ${timeout}ms. Check loaders/play and the supported Storybook version.`);
++  };
++  if (id) {
++    // Wait for render, loaders and play, independently of the framework used by the story.
++    while (window.__STORYBOOK_PREVIEW__?.currentRender?.phase !== 'finished') {
++      check();
++      await delay(25);
++    }
++    check();
++    if (options.studioReadySelector) {
++      while (!window.document.querySelector(options.studioReadySelector)) { check(); await delay(25); }
++    }
++    await window.document.fonts.ready;
++    await Promise.all(Array.from(window.document.images).map(async image => {
++      try {
++        if (!image.complete) await image.decode();
++        if (image.currentSrc && !image.naturalWidth) throw new Error(`Broken image: ${image.currentSrc}`);
++      } catch (error) { if (options.studioFailOnBrokenImages !== false) throw error; }
++    }));
++  }
++  const settle = options.studioSettleMs ?? 350;
++  await delay(Math.max(0, settle - Math.min(100, settle)));
++  if (window.loki?.awaitReady) await window.loki.awaitReady();
++  await delay(Math.min(100, settle));
++  if (window.loki?.awaitReady) await window.loki.awaitReady();
++  if (id) check();
++};
+ module.exports = awaitLokiReady;
+diff --git a/src/get-stories.js b/src/get-stories.js
+--- a/src/get-stories.js
++++ b/src/get-stories.js
+@@ -4,12 +4,11 @@
+   const getStorybook =
+     (window.__STORYBOOK_CLIENT_API__ && window.__STORYBOOK_CLIENT_API__.raw) ||
+     (window.__STORYBOOK_PREVIEW__ &&
+-      window.__STORYBOOK_PREVIEW__.extract &&
+-      window.__STORYBOOK_PREVIEW__.storyStore.raw) ||
++      window.__STORYBOOK_PREVIEW__.extract) ||
+     (window.loki && window.loki.getStorybook);
+   if (!getStorybook) {
+     throw new Error(
+-      "Unable to get stories. Try adding `import 'loki/configure-react'` to your .storybook/preview.js file."
++      "Unable to read Storybook preview API. Check that this is a supported Storybook build and that iframe.html loads correctly."
+     );
+   }
+   const blockedParams = [
+@@ -33,16 +32,23 @@
+ 
+   if (window.__STORYBOOK_PREVIEW__ && window.__STORYBOOK_PREVIEW__.extract) {
+     // New official API to extract stories from preview
+-    await window.__STORYBOOK_PREVIEW__.extract();
+-
+-    // Deprecated, will be removed in V9
+-    const stories = window.__STORYBOOK_PREVIEW__.storyStore.raw();
++    const preview = window.__STORYBOOK_PREVIEW__;
++    if (preview.ready) await preview.ready();
++    // Avoid exhausting Chromium's network resources on large Vite story graphs.
++    if (preview.importFn) {
++      const response = await window.fetch(new URL('index.json', window.location.href));
++      if (!response.ok) throw new Error('Unable to load Storybook index');
++      const index = await response.json();
++      const paths = new Set(Object.values(index.entries).filter(entry => entry.type === 'story').map(entry => entry.importPath));
++      for (const path of paths) await preview.importFn(path);
++    }
++    const stories = Object.values(await preview.extract());
+ 
+     return stories
+       .map((component) => ({
+         id: component.id,
+-        kind: component.kind,
+-        story: component.story,
++        kind: component.title || component.kind,
++        story: component.name || component.story,
+         parameters: Object.fromEntries(
+           Object.entries(component.parameters || {}).filter(
+             ([key, value]) =>
+@@ -52,11 +58,11 @@
+           )
+         ),
+       }))
+-      .filter(({ parameters }) => !parameters.loki || !parameters.loki.skip);
++      ;
+   }
+ 
+   if (
+-    window.__STORYBOOK_CLIENT_API__.storyStore &&
++    window.__STORYBOOK_CLIENT_API__?.storyStore &&
+     window.__STORYBOOK_CLIENT_API__.storyStore.cacheAllCSFFiles
+   ) {
+     await window.__STORYBOOK_CLIENT_API__.storyStore.cacheAllCSFFiles();
+@@ -65,8 +71,8 @@
+   return getStorybook()
+     .map((component) => ({
+       id: component.id,
+-      kind: component.kind,
+-      story: component.story,
++      kind: component.title || component.kind,
++      story: component.name || component.story,
+       parameters: Object.fromEntries(
+         Object.entries(component.parameters || {}).filter(
+           ([key, value]) =>
+@@ -76,7 +82,7 @@
+         )
+       ),
+     }))
+-    .filter(({ parameters }) => !parameters.loki || !parameters.loki.skip);
++    ;
+ };
+ 
+ module.exports = getStories;

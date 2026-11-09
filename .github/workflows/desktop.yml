@@ -1,0 +1,31 @@
+name: Desktop checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          package_json_file: desktop/package.json
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install-deps chromium
+      - run: pnpm test
+      - run: pnpm fixtures:build
+      - run: pnpm test:integration
+      - run: xvfb-run -a pnpm test:ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-and-reports
+          path: desktop/artifacts/

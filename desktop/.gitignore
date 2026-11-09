@@ -1,0 +1,8 @@
+node_modules/
+dist/
+artifacts/
+*.log
+storybook-static/
+.env
+.env.*
+!examples/.env.example
